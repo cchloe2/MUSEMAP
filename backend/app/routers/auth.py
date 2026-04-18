@@ -2,17 +2,16 @@ import secrets
 import hashlib
 import base64
 import httpx
-from fastapi import APIRouter, HTTPException
-from fastapi.responses import RedirectResponse
+from fastapi import APIRouter, HTTPException, Cookie
+from fastapi.responses import RedirectResponse, JSONResponse
 from app.config import settings
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
-# ─── Stockage temporaire du code_verifier (en prod : utiliser Redis/DB) ───
 _pkce_store: dict = {}
 
+
 def _generate_pkce_pair() -> tuple[str, str]:
-    """Génère un code_verifier et son code_challenge (PKCE S256)."""
     code_verifier = secrets.token_urlsafe(64)
     digest = hashlib.sha256(code_verifier.encode()).digest()
     code_challenge = base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
@@ -21,13 +20,9 @@ def _generate_pkce_pair() -> tuple[str, str]:
 
 @router.get("/login")
 def login():
-    """
-    Étape 1 : Génère l'URL d'autorisation Spotify et redirige l'utilisateur.
-    """
+    """Redirige l'utilisateur vers la page de connexion Spotify."""
     code_verifier, code_challenge = _generate_pkce_pair()
     state = secrets.token_urlsafe(16)
-
-    # On stocke le verifier associé au state pour l'étape 3
     _pkce_store[state] = code_verifier
 
     params = {
@@ -39,25 +34,22 @@ def login():
         "code_challenge_method": "S256",
         "code_challenge": code_challenge,
     }
-
     query = "&".join(f"{k}={v}" for k, v in params.items())
-    spotify_auth_url = f"https://accounts.spotify.com/authorize?{query}"
-
-    return RedirectResponse(spotify_auth_url)
+    return RedirectResponse(f"https://accounts.spotify.com/authorize?{query}")
 
 
 @router.get("/callback")
 async def callback(code: str, state: str):
     """
-    Étape 3 : Spotify renvoie le code ici.
-    On l'échange contre un access_token + refresh_token.
+    Échange le code Spotify contre un access_token.
+    Stocke le token dans un cookie httponly sécurisé.
     """
     code_verifier = _pkce_store.pop(state, None)
     if not code_verifier:
         raise HTTPException(status_code=400, detail="State invalide ou expiré")
 
     async with httpx.AsyncClient() as client:
-        response = await client.post(
+        r = await client.post(
             "https://accounts.spotify.com/api/token",
             data={
                 "grant_type": "authorization_code",
@@ -69,46 +61,87 @@ async def callback(code: str, state: str):
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
 
-    if response.status_code != 200:
-        raise HTTPException(
-            status_code=response.status_code,
-            detail=f"Erreur Spotify : {response.text}"
-        )
+    if r.status_code != 200:
+        raise HTTPException(status_code=r.status_code, detail=r.text)
 
-    tokens = response.json()
+    tokens = r.json()
+    access_token = tokens["access_token"]
+    refresh_token = tokens.get("refresh_token", "")
 
-    # ─── Pour le MVP : on retourne les tokens directement ───
-    # En prod : stocker en DB/session sécurisée, jamais exposer le secret
-    return {
-        "access_token": tokens["access_token"],
-        "refresh_token": tokens.get("refresh_token"),
+    # ── Réponse avec cookies httponly (non lisibles par le JS du navigateur) ──
+    response = JSONResponse(content={
+        "message": "Connexion réussie ✅",
         "expires_in": tokens["expires_in"],
-        "token_type": tokens["token_type"],
         "scope": tokens.get("scope"),
-    }
+        # On expose le token ICI uniquement pour les tests /docs
+        # En prod : supprimer cette ligne
+        "access_token": access_token,
+    })
+
+    response.set_cookie(
+        key="spotify_access_token",
+        value=access_token,
+        httponly=True,       # Inaccessible au JavaScript → protège contre XSS
+        secure=False,        # Passer à True en prod (HTTPS)
+        samesite="lax",      # Protège contre CSRF
+        max_age=3600,        # Expire en même temps que le token Spotify
+    )
+    response.set_cookie(
+        key="spotify_refresh_token",
+        value=refresh_token,
+        httponly=True,
+        secure=False,        # True en prod
+        samesite="lax",
+        max_age=60 * 60 * 24 * 30,  # 30 jours
+    )
+
+    return response
 
 
 @router.post("/refresh")
-async def refresh_token(refresh_token: str):
+async def refresh_token(
+    spotify_refresh_token: str | None = Cookie(default=None),
+):
     """
-    Renouvelle l'access_token expiré via le refresh_token.
-    À appeler automatiquement quand le token expire (après 3600s).
+    Renouvelle l'access_token via le refresh_token stocké en cookie.
     """
+    if not spotify_refresh_token:
+        raise HTTPException(status_code=401, detail="Refresh token absent")
+
     async with httpx.AsyncClient() as client:
-        response = await client.post(
+        r = await client.post(
             "https://accounts.spotify.com/api/token",
             data={
                 "grant_type": "refresh_token",
-                "refresh_token": refresh_token,
+                "refresh_token": spotify_refresh_token,
                 "client_id": settings.SPOTIFY_CLIENT_ID,
             },
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
 
-    if response.status_code != 200:
-        raise HTTPException(
-            status_code=response.status_code,
-            detail=f"Erreur refresh : {response.text}"
-        )
+    if r.status_code != 200:
+        raise HTTPException(status_code=r.status_code, detail=r.text)
 
-    return response.json()
+    tokens = r.json()
+    response = JSONResponse(content={
+        "message": "Token renouvelé ✅",
+        "expires_in": tokens["expires_in"],
+    })
+    response.set_cookie(
+        key="spotify_access_token",
+        value=tokens["access_token"],
+        httponly=True,
+        secure=False,
+        samesite="lax",
+        max_age=3600,
+    )
+    return response
+
+
+@router.get("/logout")
+def logout():
+    """Supprime les cookies de session."""
+    response = JSONResponse(content={"message": "Déconnexion réussie"})
+    response.delete_cookie("spotify_access_token")
+    response.delete_cookie("spotify_refresh_token")
+    return response
