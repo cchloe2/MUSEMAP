@@ -33,6 +33,7 @@ def login():
         "state": state,
         "code_challenge_method": "S256",
         "code_challenge": code_challenge,
+        "show_dialog": "true"
     }
     query = "&".join(f"{k}={v}" for k, v in params.items())
     return RedirectResponse(f"https://accounts.spotify.com/authorize?{query}")
@@ -94,7 +95,8 @@ async def callback(code: str, state: str):
         samesite="lax",
         max_age=60 * 60 * 24 * 30,  # 30 jours
     )
-
+    print(f"\n🚀 SCOPES RÉELLEMENT ACCORDÉS PAR SPOTIFY : {tokens.get('scope')}\n")
+    
     return response
 
 

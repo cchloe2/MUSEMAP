@@ -1,15 +1,14 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer
-from app.routers import auth, spotify
+from app.routers import auth, spotify, playlist
 
-# ── Schéma de sécurité global → active le bouton "Authorize 🔒" dans /docs ──
 bearer_scheme = HTTPBearer(auto_error=False)
 
 app = FastAPI(
     title="MuseMap API",
     description="Genre & mood-based AI playlist generator",
-    version="0.3.0",
+    version="0.4.0",
 )
 
 app.add_middleware(
@@ -22,6 +21,7 @@ app.add_middleware(
 
 app.include_router(auth.router)
 app.include_router(spotify.router)
+app.include_router(playlist.router)
 
 
 @app.get("/health", tags=["system"])
@@ -29,6 +29,6 @@ def health_check():
     return {
         "status": "ok",
         "project": "MuseMap",
-        "version": "0.3.0",
-        "phase": "1 - complete",
+        "version": "0.4.0",
+        "phase": "2 - AI Engine ready",
     }

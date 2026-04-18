@@ -6,7 +6,10 @@ SPOTIFY_BASE = "https://api.spotify.com/v1"
 
 
 def _headers(access_token: str) -> dict:
-    return {"Authorization": f"Bearer {access_token}"}
+    return {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json"
+    }
 
 
 # ════════════════════════════════════════════
@@ -136,14 +139,14 @@ async def create_playlist(
     user_id: str,
     name: str,
     description: str = "",
-    public: bool = False,
+    public: bool = True,
 ) -> dict:
     """Crée une nouvelle playlist vide sur le compte utilisateur."""
     async with httpx.AsyncClient() as client:
         r = await client.post(
             f"{SPOTIFY_BASE}/users/{user_id}/playlists",
             headers={**_headers(access_token), "Content-Type": "application/json"},
-            json={"name": name, "description": description, "public": public},
+            json={"name": name, "description": description, "public": False},
         )
         r.raise_for_status()
     return r.json()
