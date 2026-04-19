@@ -119,6 +119,13 @@ export default function Generator() {
           <span style={{ fontSize:'13px', color:'var(--text-muted)' }}>
             {user.display_name}
           </span>
+          <button onClick={() => navigate('/studio')} style={{
+            padding:'6px 14px', borderRadius:'var(--radius-pill)',
+            border:'1px solid var(--border)', background:'transparent',
+            fontSize:'12px', color:'var(--text-muted)'
+          }}>
+            Studio
+          </button>
           <button onClick={logout} style={{
             padding:'6px 14px', borderRadius:'var(--radius-pill)',
             border:'1px solid var(--border)', background:'transparent',
